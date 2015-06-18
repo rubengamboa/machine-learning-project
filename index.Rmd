@@ -1,0 +1,181 @@
+# Predicting Quality of Barbell Exercises from Accelerometer Data
+
+This project examines data from wearable devices on the belt, forearm, arm, and dumbbell of
+participants while they lift barbells. Some of the lifts are done correctly and some incorrectly,
+and the goal of the project is to classify lifts according to a grading scale from A to E.
+
+## Exploratory Data Analysis
+
+The first step is to read the training and testing data sets, which can be done with the 
+following R commands.
+```{r read-data, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+alltraining <- read.csv("pml-training.csv", header=TRUE)
+testing <- read.csv("pml-testing.csv", header=TRUE)
+```
+
+At this point, it's important to see the data to try to understand what is available. 
+We can summarize the data as follows.
+```{r summarize-data, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+summary(alltraining)
+```
+This shows a total of `r length(names(alltraining))-1` independent columns, along 
+with the dependent column "classe".  
+
+Most of the columns are numeric, but there are some exceptions. For example, the column
+user_name is a factor variable that identifies the person doing the exercise.  In addition,
+there are many columns, such as skewness\_yaw\_belt that are presumably numeric, but are
+interpreted as factor variables because the original file contains the "value" #DIV/0!, which
+is interpreted as a string.  Ordinarily, I would have tried to remove those missing values,
+but actually the columns that contained them were extremely sparse, so I decided to remove them
+from consideration.  In addition, some of the columns are numeric, but I still decided
+to remove them because I was concerned the training algorithm would find spurious correlations
+with them, even if they should be completely unrelated to the classe variable.  The columns to
+remove can be found with the following R commands:
+
+```{r remove-non-numerics, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+nums <- sapply(alltraining, is.numeric)
+nums[c("X","raw_timestamp_part_1", "raw_timestamp_part_2", "num_window")] = FALSE
+```
+
+The data also has some missing values, which can be imputed. However, the summary reveals that
+columns with missing values are mostly missing, so again I decided to ignore those columns
+rather than extrapolate missing values from almost no actual data. The columns with missing values
+can be found with the following R commands:
+
+```{r remove-nan-columns, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+has.nans <- apply(alltraining, 2, function(x) 0 < length(which(is.na(x))))
+```
+
+This still leaves `r length(which(nums & !has.nans))` features to consider, which is an
+overwhelming number. I tried to graph some selected features against the classifier column
+classe to see if I could spot some relationship.  For example, the following plot shows
+how the explanatory variables corresponding to acceleration of the four sensors relate to 
+the classification variable.
+
+```{r plot-predictors, echo=TRUE,eval=TRUE,fig.height=8.0,fig.width=8.0}
+library(caret)
+featurePlot(x=alltraining[,c("total_accel_arm", 
+                             "total_accel_belt",
+                             "total_accel_forearm",
+                             "total_accel_dumbbell")],
+            y = alltraining$classe,
+            plot="pairs")
+```
+
+Unfortunately, this failed to deliver any obvious insights, even though I tried many
+combinations of explanatory variables. So I decided instead to trust a machine learning
+algorithm to find the explanatory correlations.
+            
+## Training and Cross-Validating
+
+Since we have a lot of training data, we can extract a subset for cross validation as follows.
+
+```{r split-data, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+trainIndex = createDataPartition(alltraining$classe, p = 0.60,list=FALSE)
+training = alltraining[trainIndex,]
+validating = alltraining[-trainIndex,]
+```
+
+Note: Although in the previous section we showed exploratory analysis over the entire training
+data set, in actuality we explored only the subset of the training set that was actually used for
+training.
+
+Once we have training and cross-validating data sets, we remove the columns that are non-numeric
+or that contains many NaNs, as explained in the previous section.
+
+```{r clean-data, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+training.numeric = training[,nums & !has.nans]
+training.numeric$classe = training$classe
+validating.numeric = validating[,nums & !has.nans]
+```
+
+Now it's time to train the model. With the caret package, it is easy to try any of a large
+number of machine learning algorithms. I happen to like decision trees for classification,
+and the C5.0 algorithm is the latest in a sequence of algorithms that build decision trees
+using the notion of entropy from information theory. Naturally, C5.0 was one of the first
+algorithms that I chose to consider. I also chose to center and scale the eplanatory 
+variables, as suggested in class.
+
+```{r train-model, echo=TRUE,eval=TRUE,warning=FALSE,cache=TRUE,fig.height=7.0,fig.width=7.0}
+modelFit <- train(classe ~ ., data=training.numeric, 
+                  preProcess=c("center", "scale"), method="C5.0")
+modelFit
+```
+
+The results of the fit look extremely promising, with more than 98% accuracy. I was concerned
+that the results may be overfitted, so I turned to cross-validation in order to estimate the
+out of sample error.  To do that, I used the model to predict the classification of the
+observations that were saved for validation, and I compared the predictions to the actual values
+of classe in a "confusion matrix".
+
+```{r validate-model, echo=TRUE,eval=TRUE,warning=FALSE,fig.height=7.0,fig.width=7.0}
+predictions <- predict(modelFit, newdata=validating.numeric)
+confusionMatrix(predictions, validating$classe)
+```
+
+The out of sample error results are still very promising, with an accuracy of 99.6%, 
+so the model is fine as-is, and there is no need for further tuning.  In truth, 
+the C5.0 algorithm performed extremely well, as did other machine learning algorithms, 
+such as Boosted Logistic Regression, but most of the learning methods that I tried were
+considerably worse. C5.0 is the only algorithm shown here, but that's because it was the 
+best I found, although it takes an extremely long time to train.
+
+As stated previously, C5.0 is an algorithm descended from a long line of algorithms
+that compute decisions trees based on entropy. One of the reasons I like this type of
+machine learning algorithms is that the resulting decision tree can be examined and
+sometimes understood, just as with linear regression.  To explore this idea, I looked
+at the model with the following command.  
+
+```{r examine-model, echo=TRUE,eval=FALSE,results="hide",fig.height=7.0,fig.width=7.0}
+summary(modelFit$finalModel)
+```
+
+The output is extremely large, so I am placing it in the appendix.  For now, I would
+like to draw attention to a few facts. First, one of the improvements of C5.0 over previous
+approaches (such as the IDx family of algorithms) is that C5.0 can learn rules (as in
+expert systems) as well as decision trees. With this particular dataset, C5.0 chose to
+create rules (or rather, the caret front-end chose rules after considering different models).
+While there are many rules, the following is representative:
+
+     Rule 0/1: (915, lift 3.5)
+      gyros_dumbbell_z <= 0.1288298
+      pitch_forearm <= -1.611072
+      ->  class A  [0.999]
+
+This particular rule classifies an observation as "A" if the values of the eplanatory variable
+gyros\_dumbbell\_z is no more than 0.1288298 and pitch_forearm is no more than -1.611072.
+Moreover, this rule correctly classifies 99.9% of the records in the training set.
+
+The second observation is that C5.0 considered `r length(which(nums & !has.nans))` different
+explanatory variables.  In the final model, 19 of these features are used more than 90% of the
+time, 31 of them more than 80% of the time, and 42 more than 60% of the time.  It's clear that 
+there is no dominant feature that can predict the variable classe reliably, which reinforces what 
+I discovered during exploratory analysis.
+
+## Testing
+
+The final step is to test the model by predicting the classe variable for each of the observations
+in the official training dataset.  Note that the true values of classe for this dataset are
+unknown, so there is no way to find the classe variable a priori.
+
+The predicted classifications can be found as follows:
+
+```{r test-model, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+testing.numeric = testing[,nums & !has.nans]
+test.predictions <- predict(modelFit, newdata=testing.numeric)
+```
+
+There are 20 observations in the testing set, so this yields 20 predicted classifications. Given
+the high accuracy achieved during cross-validation, I expected that 19 or 20 of these predictions
+would prove correct. To test this, I uploaded the classifications to the assignment website, and I
+was happily surprised that all 20 predictions were correct.  This confirmed the suspicion that the
+model is sufficiently accurate as-is, so there is no need to consider more complex models.
+
+## Appendix: The Model Built by C5.0 
+
+Here is the full model that C5.0 found during training.
+
+```{r examine-model-appendix, echo=TRUE,eval=TRUE,fig.height=7.0,fig.width=7.0}
+summary(modelFit$finalModel)
+```
+
